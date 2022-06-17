@@ -4,66 +4,53 @@ use serde::{Serialize, Deserialize};
 
 // TODO use Decimal crate for better match and 4 decimal precision
 
-const TX_TYPE_CHARGEBACK: &str = "chargeback";
-const TX_TYPE_DEPOSIT: &str = "deposit";
-const TX_TYPE_DISPUTE: &str = "dispute";
-const TX_TYPE_RESOLVE: &str = "resolve";
-const TX_TYPE_WITHDRAWAL: &str = "withdrawal";
-
-const TX_STATE_OPEN: &str = "open";
-const TX_STATE_ACTIVE_DISPUTE: &str = "active_dispute";
-const TX_STATE_CHARGED_BACK: &str = "chargedback";
-
-struct HistoricalTransaction {
-    r#type: &'static str,
-    client: u16,
-    amount: f32,
-    state: &'static str,
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "lowercase")]
+enum TransactionType {
+    Chargeback,
+    Deposit,
+    Dispute,
+    Resolve,
+    Withdrawal,
 }
 
-impl<'a> From<Transaction<'a>> for HistoricalTransaction {
-    fn from(tx: Transaction) -> Self {
-        Self {
-            r#type: tx.type_to_static(),
-            client: tx.client,
-            amount: tx.amount.unwrap_or_default(),
-            state: tx.state,
-        }
+#[derive(Debug, PartialEq)]
+enum TransactionState {
+    Open,
+    ActiveDispute,
+    ChargedBack,
+}
+
+impl Default for TransactionState {
+    fn default() -> Self {
+        Self::Open
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-struct Transaction<'a> {
-    r#type: &'a str,
+#[derive(Debug, Deserialize, PartialEq)]
+struct Transaction {
+    #[serde(rename = "type")]
+    _type: TransactionType,
     client: u16,
     tx: u32,
     amount: Option<f32>, // 4 decimal precision is spelled out explicitly in the requirements
-    #[serde(skip, default = "default_state")]
-    state: &'static str,
+    #[serde(skip)]
+    state: TransactionState,
 }
 
-fn default_state() -> &'static str {
-    TX_STATE_OPEN
-}
-
-impl<'a> Transaction<'a> {
-    fn type_to_static(&self) -> &'static str {
-        match self.r#type {
-            TX_TYPE_WITHDRAWAL => TX_TYPE_WITHDRAWAL,
-            TX_TYPE_DEPOSIT => TX_TYPE_DEPOSIT,
-            TX_TYPE_DISPUTE => TX_TYPE_DISPUTE,
-            TX_TYPE_RESOLVE => TX_TYPE_RESOLVE,
-            TX_TYPE_CHARGEBACK => TX_TYPE_CHARGEBACK,
-            _ => "",
+impl Transaction {
+    fn requires_unique_tx(&self) -> bool {
+        match self._type {
+            TransactionType::Withdrawal | TransactionType::Deposit => true,
+            TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => false,
         }
     }
 
-    fn requires_unique_tx(&self) -> bool {
-        self.r#type == TX_TYPE_WITHDRAWAL || self.r#type == TX_TYPE_DEPOSIT
-    }
-
     fn requires_history(&self) -> bool {
-        self.r#type == TX_TYPE_DEPOSIT
+        match self._type {
+            TransactionType::Deposit => true,
+            TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => false,
+        }
     }
 }
 
@@ -80,24 +67,27 @@ struct Account {
 
 impl Account {
     fn is_locked_tx(&self, tx: &Transaction) -> bool {
-        matches!(tx.r#type, TX_TYPE_DEPOSIT | TX_TYPE_WITHDRAWAL if self.locked)
+        match tx._type {
+            TransactionType::Deposit | TransactionType::Withdrawal if self.locked => true,
+            TransactionType::Deposit | TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Chargeback | TransactionType::Resolve => false,
+        }
     }
 
-    fn apply_tx(&mut self, tx: &Transaction, referenced_tx: Option<&mut HistoricalTransaction>) {
+    fn apply_tx(&mut self, tx: &Transaction, referenced_tx: Option<&mut Transaction>) {
         self.touched = true;
 
         if self.is_locked_tx(tx) {
             return;
         }
 
-        match tx.r#type {
-            TX_TYPE_DEPOSIT => {
+        match tx._type {
+            TransactionType::Deposit => {
                 let amount = tx.amount.unwrap_or_default();
 
                 self.available += amount;
                 self.total += amount;
             },
-            TX_TYPE_WITHDRAWAL => {
+            TransactionType::Withdrawal => {
                 let amount = tx.amount.unwrap_or_default();
 
                 if self.available >= amount {
@@ -105,47 +95,70 @@ impl Account {
                     self.total -= amount;
                 }
             },
-            TX_TYPE_DISPUTE => {
+            TransactionType::Dispute => {
                 if let Some(referenced_tx) = referenced_tx {
-                    if referenced_tx.r#type == TX_TYPE_DEPOSIT && referenced_tx.state == TX_STATE_OPEN {
-                        let amount = referenced_tx.amount;
+                    match referenced_tx._type {
+                        TransactionType::Deposit => {
+                            match referenced_tx.state {
+                                TransactionState::Open => {
+                                    let amount = referenced_tx.amount.unwrap_or_default();
 
-                        if amount > 0f32 {
-                            referenced_tx.state = TX_STATE_ACTIVE_DISPUTE;
-                            self.available -= amount;
-                            self.held += amount;
-                        }
+                                    if amount > 0f32 {
+                                        referenced_tx.state = TransactionState::ActiveDispute;
+                                        self.available -= amount;
+                                        self.held += amount;
+                                    }
+                                },
+                                TransactionState::ActiveDispute | TransactionState::ChargedBack => (),
+                            }
+                        },
+                        TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => (),
                     }
                 }
             },
-            TX_TYPE_RESOLVE => {
+            TransactionType::Resolve => {
                 if let Some(referenced_tx) = referenced_tx {
-                    if referenced_tx.r#type == TX_TYPE_DEPOSIT && referenced_tx.state == TX_STATE_ACTIVE_DISPUTE {
-                        let amount = referenced_tx.amount;
+                    match referenced_tx._type {
+                        TransactionType::Deposit => {
+                            match referenced_tx.state {
+                                TransactionState::ActiveDispute => {
+                                    let amount = referenced_tx.amount.unwrap_or_default();
 
-                        if amount > 0f32 {
-                            self.available += amount;
-                            self.held -= amount;
-                            referenced_tx.state = TX_STATE_OPEN;
-                        }
+                                    if amount > 0f32 {
+                                        self.available += amount;
+                                        self.held -= amount;
+                                        referenced_tx.state = TransactionState::Open;
+                                    }
+                                },
+                                TransactionState::Open | TransactionState::ChargedBack => (),
+                            }
+                        },
+                        TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => (),
                     }
                 }
             },
-            TX_TYPE_CHARGEBACK => {
+            TransactionType::Chargeback => {
                 if let Some(referenced_tx) = referenced_tx {
-                    if referenced_tx.r#type == TX_TYPE_DEPOSIT && referenced_tx.state == TX_STATE_ACTIVE_DISPUTE {
-                        let amount = referenced_tx.amount;
+                    match referenced_tx._type {
+                        TransactionType::Deposit => {
+                            match referenced_tx.state {
+                                TransactionState::ActiveDispute => {
+                                    let amount = referenced_tx.amount.unwrap_or_default();
 
-                        if amount > 0f32 {
-                            self.total -= amount;
-                            self.held -= amount;
-                            self.locked = true;
-                            referenced_tx.state = TX_STATE_CHARGED_BACK;
-                        }
+                                    if amount > 0f32 {
+                                        self.total -= amount;
+                                        self.held -= amount;
+                                        self.locked = true;
+                                        referenced_tx.state = TransactionState::ChargedBack;
+                                    }
+                                },
+                                TransactionState::Open | TransactionState::ChargedBack => (),
+                            }
+                        },
+                        TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => (),
                     }
                 }
             },
-            _ => (),
         }
     }
 }
@@ -155,16 +168,14 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
 {
     // take advantage of client: u16 and allocate the full account ledger once
     let mut ledger: [Account; 65_536] = [Default::default(); 65_536]; // ~ 1MB allocation
-    let mut tx_history: HashMap<u32, HistoricalTransaction> = Default::default();
+    let mut tx_history: HashMap<u32, Transaction> = Default::default();
 
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_path(path)?;
-    let mut raw_record = csv::StringRecord::new();
-    let headers = reader.headers()?.clone();
 
-    while reader.read_record(&mut raw_record)? {
-        let tx: Transaction = raw_record.deserialize(Some(&headers))?;
+    for record in reader.deserialize() {
+        let tx: Transaction = record?;
 
         if tx.requires_unique_tx() && tx_history.contains_key(&tx.tx) {
             let error = io::Error::new(
@@ -187,7 +198,7 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
             account.apply_tx(&tx, referenced_tx);
 
             if tx.requires_history() {
-                tx_history.insert(tx.tx, tx.into());
+                tx_history.insert(tx.tx, tx);
             }
         }
     }
@@ -237,16 +248,6 @@ mod tests {
 
     #[test]
     fn simple_des() {
-        let expected = vec![
-            Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(1f32), state: TX_STATE_OPEN },
-            Transaction { r#type: TX_TYPE_DEPOSIT, client: 2u16, tx: 2u32, amount: Some(2f32), state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 3u32, amount: Some(2f32), state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 4u32, amount: Some(1.5f32), state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 2u16, tx: 5u32, amount: Some(3.0f32), state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_CHARGEBACK, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_DISPUTE, client: 2u16, tx: 2u32, amount: None, state: TX_STATE_OPEN  },
-            Transaction { r#type: TX_TYPE_RESOLVE, client: 2u16, tx: 2u32, amount: None, state: TX_STATE_OPEN  },
-        ];
         let actual = r#"type, client, tx, amount
 deposit,1,1,1.0
 deposit, 2, 2, 2.0
@@ -257,21 +258,32 @@ chargeback, 1, 1,
 dispute, 2, 2,
 resolve, 2, 2,
 "#;
-        let mut reader = csv::ReaderBuilder::new()
+        let mut actual = csv::ReaderBuilder::new()
             .trim(csv::Trim::All)
             .from_reader(actual.as_bytes());
-        let mut raw_record = csv::StringRecord::new();
-        let headers = reader.headers().unwrap().clone();
-        let mut expected_counter = 0;
+        let mut actual = actual.deserialize();
+        let mut accum = Vec::default();
 
-        // TODO fix
-        while reader.read_record(&mut raw_record).unwrap() {
-            let actual: Transaction = raw_record.deserialize(Some(&headers)).unwrap();
-
-            assert_eq!(actual, expected[expected_counter]);
-
-            expected_counter += 1;
+        while let Some(actual) = actual.next() {
+            match actual {
+                Ok::<Transaction, _>(actual) => accum.push(actual),
+                Err(err) => assert_eq!(format!("{:?}", err), ""),
+            }
         }
+
+        assert_eq!(
+            accum,
+            vec![
+                Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(1f32), state: TransactionState::Open },
+                Transaction { _type: TransactionType::Deposit, client: 2u16, tx: 2u32, amount: Some(2f32), state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 3u32, amount: Some(2f32), state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 4u32, amount: Some(1.5f32), state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Withdrawal, client: 2u16, tx: 5u32, amount: Some(3.0f32), state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Chargeback, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Dispute, client: 2u16, tx: 2u32, amount: None, state: TransactionState::Open  },
+                Transaction { _type: TransactionType::Resolve, client: 2u16, tx: 2u32, amount: None, state: TransactionState::Open  },
+            ],
+        )
     }
 
     #[test]
@@ -295,8 +307,8 @@ resolve, 2, 2,
     fn deposit_and_withdraw_flow() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(1f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 2u32, amount: Some(3f32), state: TX_STATE_OPEN };
+        let tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(1f32), state: TransactionState::Open };
+        let tx2 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 2u32, amount: Some(3f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -306,7 +318,7 @@ resolve, 2, 2,
         assert_eq!(4f32, account.available);
         assert_eq!(0f32, account.held);
 
-        let tx1 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 1u32, amount: Some(1f32), state: TX_STATE_OPEN };
+        let tx1 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 1u32, amount: Some(1f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
 
@@ -314,8 +326,8 @@ resolve, 2, 2,
         assert_eq!(3f32, account.available);
         assert_eq!(0f32, account.held);
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(5f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(1f32), state: TX_STATE_OPEN };
+        let tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(5f32), state: TransactionState::Open };
+        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(1f32), state: TransactionState::Open };
 
         account.locked = true;
         account.apply_tx(&tx1, None);
@@ -330,8 +342,8 @@ resolve, 2, 2,
     fn omit_excess_withdrawals() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(1f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(3f32), state: TX_STATE_OPEN };
+        let tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(1f32), state: TransactionState::Open };
+        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(3f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -345,8 +357,8 @@ resolve, 2, 2,
     fn can_withdraw_to_zero() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(10f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(10f32), state: TX_STATE_OPEN };
+        let tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(10f32), state: TransactionState::Open };
+        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(10f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -360,8 +372,8 @@ resolve, 2, 2,
     fn dispute_txs() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(10f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(5f32), state: TX_STATE_OPEN };
+        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(10f32), state: TransactionState::Open };
+        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(5f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -370,7 +382,7 @@ resolve, 2, 2,
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
 
-        let dispute_tx = Transaction { r#type: TX_TYPE_DISPUTE, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN };
+        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open };
 
         account.apply_tx(&dispute_tx, None);
 
@@ -378,37 +390,34 @@ resolve, 2, 2,
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
 
-        let mut tx1 = tx1.into();
-        let mut tx2 = tx2.into();
-
         account.apply_tx(&dispute_tx, Some(&mut tx2));
 
         assert_eq!(5f32, account.total);
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
-        assert_eq!(TX_STATE_OPEN, tx2.state);
+        assert_eq!(TransactionState::Open, tx2.state);
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
         assert_eq!(5f32, account.total);
         assert_eq!(-5f32, account.available);
         assert_eq!(10f32, account.held);
-        assert_eq!(TX_STATE_ACTIVE_DISPUTE, tx1.state);
+        assert_eq!(TransactionState::ActiveDispute, tx1.state);
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
         assert_eq!(5f32, account.total);
         assert_eq!(-5f32, account.available);
         assert_eq!(10f32, account.held);
-        assert_eq!(TX_STATE_ACTIVE_DISPUTE, tx1.state);
+        assert_eq!(TransactionState::ActiveDispute, tx1.state);
     }
 
     #[test]
     fn resolve_tx() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(10f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(5f32), state: TX_STATE_OPEN };
+        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(10f32), state: TransactionState::Open };
+        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(5f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -417,20 +426,18 @@ resolve, 2, 2,
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
 
-        let dispute_tx = Transaction { r#type: TX_TYPE_DISPUTE, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN };
-        let mut tx1 = tx1.into();
-        let mut tx2: HistoricalTransaction = tx2.into();
+        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open };
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
         assert_eq!(5f32, account.total);
         assert_eq!(-5f32, account.available);
         assert_eq!(10f32, account.held);
-        assert_eq!(TX_STATE_ACTIVE_DISPUTE, tx1.state);
+        assert_eq!(TransactionState::ActiveDispute, tx1.state);
 
-        let resolve_tx = Transaction { r#type: TX_TYPE_RESOLVE, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN };
+        let resolve_tx = Transaction { _type: TransactionType::Resolve, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open };
 
-        tx2.state = TX_STATE_ACTIVE_DISPUTE;
+        tx2.state = TransactionState::ActiveDispute;
         account.apply_tx(&resolve_tx, Some(&mut tx2));
 
         assert_eq!(5f32, account.total);
@@ -442,22 +449,22 @@ resolve, 2, 2,
         assert_eq!(5f32, account.total);
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
-        assert_eq!(TX_STATE_OPEN, tx1.state);
+        assert_eq!(TransactionState::Open, tx1.state);
 
         account.apply_tx(&resolve_tx, Some(&mut tx1));
 
         assert_eq!(5f32, account.total);
         assert_eq!(5f32, account.available);
         assert_eq!(0f32, account.held);
-        assert_eq!(TX_STATE_OPEN, tx1.state);
+        assert_eq!(TransactionState::Open, tx1.state);
     }
 
     #[test]
     fn chargeback_tx() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { r#type: TX_TYPE_DEPOSIT, client: 1u16, tx: 1u32, amount: Some(10f32), state: TX_STATE_OPEN };
-        let tx2 = Transaction { r#type: TX_TYPE_WITHDRAWAL, client: 1u16, tx: 2u32, amount: Some(5f32), state: TX_STATE_OPEN };
+        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: 1u16, tx: 1u32, amount: Some(10f32), state: TransactionState::Open };
+        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: 1u16, tx: 2u32, amount: Some(5f32), state: TransactionState::Open };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -467,20 +474,18 @@ resolve, 2, 2,
         assert_eq!(0f32, account.held);
         assert!(!account.locked);
 
-        let dispute_tx = Transaction { r#type: TX_TYPE_DISPUTE, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN };
-        let mut tx1 = tx1.into();
-        let mut tx2: HistoricalTransaction = tx2.into();
+        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open };
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
         assert_eq!(5f32, account.total);
         assert_eq!(-5f32, account.available);
         assert_eq!(10f32, account.held);
-        assert_eq!(TX_STATE_ACTIVE_DISPUTE, tx1.state);
+        assert_eq!(TransactionState::ActiveDispute, tx1.state);
 
-        let chargeback_tx = Transaction { r#type: TX_TYPE_CHARGEBACK, client: 1u16, tx: 1u32, amount: None, state: TX_STATE_OPEN };
+        let chargeback_tx = Transaction { _type: TransactionType::Chargeback, client: 1u16, tx: 1u32, amount: None, state: TransactionState::Open };
 
-        tx2.state = TX_STATE_ACTIVE_DISPUTE;
+        tx2.state = TransactionState::ActiveDispute;
         account.apply_tx(&chargeback_tx, Some(&mut tx2));
 
         assert_eq!(5f32, account.total);
@@ -493,7 +498,7 @@ resolve, 2, 2,
         assert_eq!(-5f32, account.available);
         assert_eq!(0f32, account.held);
         assert!(account.locked);
-        assert_eq!(TX_STATE_CHARGED_BACK, tx1.state);
+        assert_eq!(TransactionState::ChargedBack, tx1.state);
 
         account.apply_tx(&chargeback_tx, Some(&mut tx1));
 
@@ -501,7 +506,7 @@ resolve, 2, 2,
         assert_eq!(-5f32, account.available);
         assert_eq!(0f32, account.held);
         assert!(account.locked);
-        assert_eq!(TX_STATE_CHARGED_BACK, tx1.state);
+        assert_eq!(TransactionState::ChargedBack, tx1.state);
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
         account.apply_tx(&chargeback_tx, Some(&mut tx1));
@@ -510,7 +515,7 @@ resolve, 2, 2,
         assert_eq!(-5f32, account.available);
         assert_eq!(0f32, account.held);
         assert!(account.locked);
-        assert_eq!(TX_STATE_CHARGED_BACK, tx1.state);
+        assert_eq!(TransactionState::ChargedBack, tx1.state);
     }
 }
 
@@ -521,5 +526,3 @@ resolve, 2, 2,
 // test tests::small  ... bench:      96,385 ns/iter (+/- 4,975)
 //
 // -- zero serde allocations --
-// nearly the same as above..based on the flamegraph the majority of time is being spent in
-// csv::trim and csv::StringRecord
