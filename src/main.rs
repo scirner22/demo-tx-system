@@ -60,8 +60,6 @@ struct Account {
     held: Decimal,
     total: Decimal, // available + held
     locked: bool, // an account is locked if a charge back occurs
-    #[serde(skip)]
-    touched: bool,
 }
 
 impl Account {
@@ -73,8 +71,6 @@ impl Account {
     }
 
     fn apply_tx(&mut self, tx: &Transaction, referenced_tx: Option<&mut Transaction>) {
-        self.touched = true;
-
         if self.is_locked_tx(tx) {
             return;
         }
@@ -178,7 +174,7 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
         let amount = tx.amount.unwrap_or_default();
 
         // skip transactions with an invalid amount
-        if amount.is_negative() {
+        if amount.is_sign_negative() {
             continue;
         }
 
@@ -209,10 +205,10 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
         .from_writer(io::stdout());
 
     for account in ledger.values() {
-        if account.touched {
-            wtr.serialize(account)?;
-        }
+        wtr.serialize(account)?;
     }
+
+    wtr.flush()?;
 
     Ok(())
 }
@@ -302,8 +298,8 @@ resolve, 2, 2,
         let mut wtr = csv::WriterBuilder::new()
             .from_writer(vec![]);
 
-        wtr.serialize(Account { client: 1u16, available: dec!(1.5), held: Decimal::ZERO, total: dec!(1.5), locked: false, touched: true }).unwrap();
-        wtr.serialize(Account { client: 2u16, available: Decimal::TWO, held: Decimal::ZERO, total: Decimal::TWO, locked: true, touched: false }).unwrap();
+        wtr.serialize(Account { client: 1u16, available: dec!(1.5), held: Decimal::ZERO, total: dec!(1.5), locked: false }).unwrap();
+        wtr.serialize(Account { client: 2u16, available: Decimal::TWO, held: Decimal::ZERO, total: Decimal::TWO, locked: true }).unwrap();
 
         let actual = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
         let expected = r#"client,available,held,total,locked
@@ -325,7 +321,6 @@ resolve, 2, 2,
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
 
-        assert!(account.touched);
         assert_eq!(dec!(4), account.total);
         assert_eq!(dec!(4), account.available);
         assert_eq!(Decimal::ZERO, account.held);
