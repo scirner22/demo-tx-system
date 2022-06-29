@@ -7,7 +7,8 @@ use account::Account;
 use transaction::{Transaction, TxId};
 
 pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
-    where P: AsRef<Path>,
+where
+    P: AsRef<Path>,
 {
     let mut ledger = HashMap::new();
     let mut tx_history: HashMap<TxId, Transaction> = Default::default();
@@ -35,9 +36,13 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
             return Err(Box::new(error));
         }
 
-        let account = ledger.entry(tx.client).or_insert_with(|| Account::new(tx.client));
+        let account = ledger
+            .entry(tx.client)
+            .or_insert_with(|| Account::new(tx.client));
         let referenced_tx = tx_history.get_mut(&tx.tx);
-        let referenced_tx_client = referenced_tx.as_ref().map_or_else(|| tx.client, |x| x.client);
+        let referenced_tx_client = referenced_tx
+            .as_ref()
+            .map_or_else(|| tx.client, |x| x.client);
 
         // skip processing txs where the referenced tx is for a different client
         if referenced_tx_client == tx.client {
@@ -49,8 +54,7 @@ pub fn run<P>(path: P) -> Result<(), Box<dyn error::Error>>
         }
     }
 
-    let mut wtr = csv::WriterBuilder::new()
-        .from_writer(io::stdout());
+    let mut wtr = csv::WriterBuilder::new().from_writer(io::stdout());
 
     for account in ledger.values() {
         wtr.serialize(account)?;
@@ -83,13 +87,15 @@ mod tests {
     use serial_test::serial;
 
     use super::*;
-    use crate::transaction::{ClientId, TxId, TransactionState, TransactionType};
+    use crate::transaction::{ClientId, TransactionState, TransactionType, TxId};
 
     #[test]
     #[serial]
     fn e2e() {
-        let expected1 = "client,available,held,total,locked\n2,0,0,0,true\n1,0.5000,1.0111,1.5111,false\n";
-        let expected2 = "client,available,held,total,locked\n1,0.5000,1.0111,1.5111,false\n2,0,0,0,true\n";
+        let expected1 =
+            "client,available,held,total,locked\n2,0,0,0,true\n1,0.5000,1.0111,1.5111,false\n";
+        let expected2 =
+            "client,available,held,total,locked\n1,0.5000,1.0111,1.5111,false\n2,0,0,0,true\n";
         let buf = gag::BufferRedirect::stdout().unwrap();
         let mut output = String::new();
 
@@ -130,14 +136,62 @@ resolve, 2, 2,
         assert_eq!(
             accum,
             vec![
-                Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(Decimal::ONE), state: TransactionState::Open },
-                Transaction { _type: TransactionType::Deposit, client: ClientId(2u16), tx: TxId(2u32), amount: Some(Decimal::TWO), state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(3u32), amount: Some(Decimal::TWO), state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(4u32), amount: Some(dec!(1.5)), state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Withdrawal, client: ClientId(2u16), tx: TxId(5u32), amount: Some(dec!(3.0)), state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Chargeback, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Dispute, client: ClientId(2u16), tx: TxId(2u32), amount: None, state: TransactionState::Open  },
-                Transaction { _type: TransactionType::Resolve, client: ClientId(2u16), tx: TxId(2u32), amount: None, state: TransactionState::Open  },
+                Transaction {
+                    _type: TransactionType::Deposit,
+                    client: ClientId(1u16),
+                    tx: TxId(1u32),
+                    amount: Some(Decimal::ONE),
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Deposit,
+                    client: ClientId(2u16),
+                    tx: TxId(2u32),
+                    amount: Some(Decimal::TWO),
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Deposit,
+                    client: ClientId(1u16),
+                    tx: TxId(3u32),
+                    amount: Some(Decimal::TWO),
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Withdrawal,
+                    client: ClientId(1u16),
+                    tx: TxId(4u32),
+                    amount: Some(dec!(1.5)),
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Withdrawal,
+                    client: ClientId(2u16),
+                    tx: TxId(5u32),
+                    amount: Some(dec!(3.0)),
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Chargeback,
+                    client: ClientId(1u16),
+                    tx: TxId(1u32),
+                    amount: None,
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Dispute,
+                    client: ClientId(2u16),
+                    tx: TxId(2u32),
+                    amount: None,
+                    state: TransactionState::Open
+                },
+                Transaction {
+                    _type: TransactionType::Resolve,
+                    client: ClientId(2u16),
+                    tx: TxId(2u32),
+                    amount: None,
+                    state: TransactionState::Open
+                },
             ],
         )
     }
@@ -145,11 +199,24 @@ resolve, 2, 2,
     #[test]
     #[serial]
     fn simple_ser() {
-        let mut wtr = csv::WriterBuilder::new()
-            .from_writer(vec![]);
+        let mut wtr = csv::WriterBuilder::new().from_writer(vec![]);
 
-        wtr.serialize(Account { client: ClientId(1u16), available: dec!(1.5), held: Decimal::ZERO, total: dec!(1.5), locked: false }).unwrap();
-        wtr.serialize(Account { client: ClientId(2u16), available: Decimal::TWO, held: Decimal::ZERO, total: Decimal::TWO, locked: true }).unwrap();
+        wtr.serialize(Account {
+            client: ClientId(1u16),
+            available: dec!(1.5),
+            held: Decimal::ZERO,
+            total: dec!(1.5),
+            locked: false,
+        })
+        .unwrap();
+        wtr.serialize(Account {
+            client: ClientId(2u16),
+            available: Decimal::TWO,
+            held: Decimal::ZERO,
+            total: Decimal::TWO,
+            locked: true,
+        })
+        .unwrap();
 
         let actual = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
         let expected = r#"client,available,held,total,locked
@@ -165,8 +232,20 @@ resolve, 2, 2,
     fn deposit_and_withdraw_flow() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(Decimal::ONE), state: TransactionState::Open };
-        let tx2 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(3)), state: TransactionState::Open };
+        let tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(Decimal::ONE),
+            state: TransactionState::Open,
+        };
+        let tx2 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(3)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -175,7 +254,13 @@ resolve, 2, 2,
         assert_eq!(dec!(4), account.available);
         assert_eq!(Decimal::ZERO, account.held);
 
-        let tx1 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(1u32), amount: Some(Decimal::ONE), state: TransactionState::Open };
+        let tx1 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(Decimal::ONE),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
 
@@ -183,8 +268,20 @@ resolve, 2, 2,
         assert_eq!(dec!(3), account.available);
         assert_eq!(Decimal::ZERO, account.held);
 
-        let tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(dec!(5)), state: TransactionState::Open };
-        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(Decimal::ONE), state: TransactionState::Open };
+        let tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(dec!(5)),
+            state: TransactionState::Open,
+        };
+        let tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(Decimal::ONE),
+            state: TransactionState::Open,
+        };
 
         account.locked = true;
         account.apply_tx(&tx1, None);
@@ -200,8 +297,20 @@ resolve, 2, 2,
     fn omit_excess_withdrawals() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(Decimal::ONE), state: TransactionState::Open };
-        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(3)), state: TransactionState::Open };
+        let tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(Decimal::ONE),
+            state: TransactionState::Open,
+        };
+        let tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(3)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -216,8 +325,20 @@ resolve, 2, 2,
     fn can_withdraw_to_zero() {
         let mut account = Account::default();
 
-        let tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(dec!(10)), state: TransactionState::Open };
-        let tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(10)), state: TransactionState::Open };
+        let tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(dec!(10)),
+            state: TransactionState::Open,
+        };
+        let tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(10)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -232,8 +353,20 @@ resolve, 2, 2,
     fn dispute_txs() {
         let mut account = Account::default();
 
-        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(dec!(10)), state: TransactionState::Open };
-        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(5)), state: TransactionState::Open };
+        let mut tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(dec!(10)),
+            state: TransactionState::Open,
+        };
+        let mut tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(5)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -242,7 +375,13 @@ resolve, 2, 2,
         assert_eq!(dec!(5), account.available);
         assert_eq!(Decimal::ZERO, account.held);
 
-        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open };
+        let dispute_tx = Transaction {
+            _type: TransactionType::Dispute,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: None,
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&dispute_tx, None);
 
@@ -277,8 +416,20 @@ resolve, 2, 2,
     fn resolve_tx() {
         let mut account = Account::default();
 
-        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(dec!(10)), state: TransactionState::Open };
-        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(5)), state: TransactionState::Open };
+        let mut tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(dec!(10)),
+            state: TransactionState::Open,
+        };
+        let mut tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(5)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -287,7 +438,13 @@ resolve, 2, 2,
         assert_eq!(dec!(5), account.available);
         assert_eq!(Decimal::ZERO, account.held);
 
-        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open };
+        let dispute_tx = Transaction {
+            _type: TransactionType::Dispute,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: None,
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
@@ -296,7 +453,13 @@ resolve, 2, 2,
         assert_eq!(dec!(10), account.held);
         assert_eq!(TransactionState::ActiveDispute, tx1.state);
 
-        let resolve_tx = Transaction { _type: TransactionType::Resolve, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open };
+        let resolve_tx = Transaction {
+            _type: TransactionType::Resolve,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: None,
+            state: TransactionState::Open,
+        };
 
         tx2.state = TransactionState::ActiveDispute;
         account.apply_tx(&resolve_tx, Some(&mut tx2));
@@ -325,8 +488,20 @@ resolve, 2, 2,
     fn chargeback_tx() {
         let mut account = Account::default();
 
-        let mut tx1 = Transaction { _type: TransactionType::Deposit, client: ClientId(1u16), tx: TxId(1u32), amount: Some(dec!(10)), state: TransactionState::Open };
-        let mut tx2 = Transaction { _type: TransactionType::Withdrawal, client: ClientId(1u16), tx: TxId(2u32), amount: Some(dec!(5)), state: TransactionState::Open };
+        let mut tx1 = Transaction {
+            _type: TransactionType::Deposit,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: Some(dec!(10)),
+            state: TransactionState::Open,
+        };
+        let mut tx2 = Transaction {
+            _type: TransactionType::Withdrawal,
+            client: ClientId(1u16),
+            tx: TxId(2u32),
+            amount: Some(dec!(5)),
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&tx1, None);
         account.apply_tx(&tx2, None);
@@ -336,7 +511,13 @@ resolve, 2, 2,
         assert_eq!(Decimal::ZERO, account.held);
         assert!(!account.locked);
 
-        let dispute_tx = Transaction { _type: TransactionType::Dispute, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open };
+        let dispute_tx = Transaction {
+            _type: TransactionType::Dispute,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: None,
+            state: TransactionState::Open,
+        };
 
         account.apply_tx(&dispute_tx, Some(&mut tx1));
 
@@ -345,7 +526,13 @@ resolve, 2, 2,
         assert_eq!(dec!(10), account.held);
         assert_eq!(TransactionState::ActiveDispute, tx1.state);
 
-        let chargeback_tx = Transaction { _type: TransactionType::Chargeback, client: ClientId(1u16), tx: TxId(1u32), amount: None, state: TransactionState::Open };
+        let chargeback_tx = Transaction {
+            _type: TransactionType::Chargeback,
+            client: ClientId(1u16),
+            tx: TxId(1u32),
+            amount: None,
+            state: TransactionState::Open,
+        };
 
         tx2.state = TransactionState::ActiveDispute;
         account.apply_tx(&chargeback_tx, Some(&mut tx2));

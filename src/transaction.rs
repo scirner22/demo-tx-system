@@ -45,14 +45,19 @@ impl Transaction {
     pub fn requires_unique_tx(&self) -> bool {
         match self._type {
             TransactionType::Withdrawal | TransactionType::Deposit => true,
-            TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => false,
+            TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => {
+                false
+            }
         }
     }
 
     pub fn requires_history(&self) -> bool {
         match self._type {
             TransactionType::Deposit => true,
-            TransactionType::Withdrawal | TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => false,
+            TransactionType::Withdrawal
+            | TransactionType::Dispute
+            | TransactionType::Resolve
+            | TransactionType::Chargeback => false,
         }
     }
 }
