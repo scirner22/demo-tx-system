@@ -13,13 +13,14 @@ chargebacks are still allowed.
 
 ## Surprises
 
-In commit ef1f6c98f777b006e5d2ee0a1ac7384e25a3750a I attempted to move from an "owned" serde
-struct to one with a lifetime. This was done to produce no allocations due to serde deserialization.
-This made the code less readable, because sum types had to be moved to `'static str` types instead.
-After completing this commit, I was surprised when the bench tests produced no noticable benefit.
-After generating a flame graph (present at the root at `pretty-graph.svg`), it showed that the
-majority of the time was actually being spent in `csv::trim` and `csv::StringRecord`. Since this
-was the case, and the code was less readable, I reverted back to the previous commit and continued.
+In commit [5d143f549c2691bc26284483b45c1169f7f680f6](https://github.com/scirner22/demo-tx-system/commit/5d143f549c2691bc26284483b45c1169f7f680f6)
+I attempted to move from an "owned" serde struct to one with a lifetime. This was done to produce
+no allocations due to serde deserialization. This made the code less readable, because sum types
+had to be moved to `'static str` types instead. After completing this commit, I was surprised when
+the bench tests produced no noticable benefit. After generating a flame graph (present at the
+root at `pretty-graph.svg`), it showed that the majority of the time was actually being spent in
+`csv::trim` and `csv::StringRecord`. Since this was the case, and the code was less readable,
+I reverted back to the previous commit and continued.
 
 ## Solution
 
