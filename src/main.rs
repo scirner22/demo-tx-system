@@ -20,10 +20,8 @@ where
     for record in reader.deserialize() {
         let tx: Transaction = record?;
 
-        let amount = tx.amount.unwrap_or_default();
-
-        // skip transactions with an invalid amount
-        if amount.is_sign_negative() {
+        // skip records that aren't valid - an alternative would be to print them to the stderr
+        if !tx.valid_tx_data() {
             continue;
         }
 
@@ -129,12 +127,11 @@ resolve, 2, 2,
         while let Some(actual) = actual.next() {
             match actual {
                 Ok::<Transaction, _>(actual) => accum.push(actual),
-                Err(err) => assert_eq!(format!("{:?}", err), ""),
+                Err(err) => assert_eq!("", format!("{:?}", err)),
             }
         }
 
         assert_eq!(
-            accum,
             vec![
                 Transaction {
                     _type: TransactionType::Deposit,
@@ -193,6 +190,7 @@ resolve, 2, 2,
                     state: TransactionState::Open
                 },
             ],
+            accum,
         )
     }
 
@@ -224,7 +222,7 @@ resolve, 2, 2,
 2,2,0,2,true
 "#;
 
-        assert_eq!(actual, expected)
+        assert_eq!(expected, actual)
     }
 
     #[test]
